@@ -1,0 +1,7 @@
+Week 1:
+__init__.py for /api
+__init__.py for /middleware
+__init__.py for /routes
+__init__.py for /external
+
+Week 2:
