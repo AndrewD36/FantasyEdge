@@ -14,17 +14,14 @@ from sqlalchemy.orm import Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.models import Base, Team, Player, PlayerTeamSeason, PlayerStat
-from app.schemas import TeamSchema, PlayerCreate, PlayerStatCreate
- 
- 
+from app.models import Base, Team, Player, PlayerTeamSeason, PlayerStat, Game, SnapCount, NgsPassing, NgsReceiving, NgsRushing
+from app.schemas import (
+    TeamSchema, PlayerCreate, PlayerStatCreate,
+    SnapCountCreate, NgsPassingCreate, NgsReceivingCreate, NgsRushingCreate,
+)
+
 DB_URL = "sqlite:///db/fantasyedge.db"
- 
- 
-# ---------------------------------------------------------------------------
-# Generic upsert helper (SQLite ON CONFLICT DO UPDATE)
-# ---------------------------------------------------------------------------
- 
+
 def upsert(session: Session, model, rows: list[dict[str, Any]], conflict_cols: list[str]) -> None:
     """Batched upsert. SQLite caps bound parameters per statement (~32k
     by default, sometimes lower), so a single INSERT with thousands of
@@ -51,12 +48,7 @@ def upsert(session: Session, model, rows: list[dict[str, Any]], conflict_cols: l
             # nothing to update, just skip duplicates
             stmt = stmt.on_conflict_do_nothing(index_elements=conflict_cols)
         session.execute(stmt)
- 
- 
-# ---------------------------------------------------------------------------
-# Teams
-# ---------------------------------------------------------------------------
- 
+
 def load_teams(session: Session) -> None:
     df = nfl.load_teams()
     rows = []
@@ -70,13 +62,7 @@ def load_teams(session: Session) -> None:
         rows.append(team.model_dump())
     upsert(session, Team, rows, conflict_cols=["team_abbr"])
     print(f"  teams: {len(rows)} upserted")
- 
- 
-# ---------------------------------------------------------------------------
-# Players (+ sleeper/yahoo IDs backfilled from rosters, which load_players()
-# does not include)
-# ---------------------------------------------------------------------------
- 
+
 def load_players(session: Session, seasons: list[int]) -> None:
     players_df = nfl.load_players()
     rosters_df = nfl.load_rosters(seasons)
@@ -131,12 +117,7 @@ def load_players(session: Session, seasons: list[int]) -> None:
  
     upsert(session, Player, rows, conflict_cols=["player_id"])
     print(f"  players: {len(rows)} upserted, {skipped} skipped (validation failures)")
- 
- 
-# ---------------------------------------------------------------------------
-# Player-team-season bridge (from weekly rosters, so it reflects trades)
-# ---------------------------------------------------------------------------
- 
+
 def load_player_team_seasons(session: Session, seasons: list[int]) -> None:
     df = nfl.load_rosters_weekly(seasons)
     rows = []
@@ -163,12 +144,7 @@ def load_player_team_seasons(session: Session, seasons: list[int]) -> None:
         conflict_cols=["player_id", "season", "team_abbr", "week"],
     )
     print(f"  player_team_seasons: {len(rows)} upserted")
- 
- 
-# ---------------------------------------------------------------------------
-# Weekly player stats
-# ---------------------------------------------------------------------------
- 
+
 def load_player_stats(session: Session, seasons: list[int]) -> None:
     df = nfl.load_player_stats(seasons, summary_level="week")
  
@@ -220,12 +196,145 @@ def load_player_stats(session: Session, seasons: list[int]) -> None:
         conflict_cols=["player_id", "season", "week", "season_type"],
     )
     print(f"  player_stats: {len(rows)} upserted, {skipped} skipped")
+
+def load_games(session: Session, seasons: list[int]) -> None:
+    df = nfl.load_schedules(seasons)
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(
+            {
+                "game_id": r["game_id"],
+                "season": r["season"],
+                "week": r["week"],
+                "game_type": r["game_type"],
+                "gameday": _parse_date(r["gameday"]),
+                "weekday": r["weekday"],
+                "gametime": r["gametime"],
+                "away_team": r["away_team"],
+                "home_team": r["home_team"],
+                "away_score": r["away_score"],
+                "home_score": r["home_score"],
+                "result": r["result"],
+                "total": r["total"],
+                "overtime": bool(r["overtime"]),
+                "div_game": bool(r["div_game"]),
+                "roof": r["roof"],
+                "surface": r["surface"],
+                "temp": r["temp"],
+                "wind": r["wind"],
+                "away_qb_id": r["away_qb_id"],
+                "home_qb_id": r["home_qb_id"],
+                "away_qb_name": r["away_qb_name"],
+                "home_qb_name": r["home_qb_name"],
+                "away_coach": r["away_coach"],
+                "home_coach": r["home_coach"],
+                "referee": r["referee"],
+                "stadium": r["stadium"],
+                "spread_line": r["spread_line"],
+                "total_line": r["total_line"],
+            }
+        )
+    upsert(session, Game, rows, conflict_cols=["game_id"])
+    print(f"  games: {len(rows)} upserted")
+
+def load_snap_counts(session: Session, seasons: list[int]) -> None:
+    df = nfl.load_snap_counts(seasons)
+    pfr_to_gsis = _pfr_id_map()
+ 
+    rows = []
+    for r in df.iter_rows(named=True):
+        try:
+            snap = SnapCountCreate(
+                player_id=pfr_to_gsis.get(r["pfr_player_id"]),
+                pfr_player_id=r["pfr_player_id"],
+                game_id=r["game_id"],
+                season=r["season"],
+                week=r["week"],
+                game_type=r["game_type"],
+                player_name=r["player"],
+                position=r["position"],
+                team_abbr=r["team"],
+                opponent_abbr=r["opponent"],
+                offense_snaps=r["offense_snaps"],
+                offense_pct=r["offense_pct"],
+                defense_snaps=r["defense_snaps"],
+                defense_pct=r["defense_pct"],
+                st_snaps=r["st_snaps"],
+                st_pct=r["st_pct"],
+            )
+        except Exception:
+            continue
+        rows.append(snap.model_dump())
+ 
+    upsert(session, SnapCount, rows, conflict_cols=["pfr_player_id", "game_id"])
+    print(f"  snap_counts: {len(rows)} upserted")
  
  
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+def _pfr_id_map() -> dict[str, str]:
+    """players.pfr_id isn't a mapped column on Player (we only kept a subset
+    of load_players()'s fields) - so build the pfr_id -> gsis_id lookup
+    straight from nflreadpy rather than the DB."""
+    players_df = nfl.load_players()
+    players_df = players_df.filter(players_df["pfr_id"].is_not_null())
+    return dict(zip(players_df["pfr_id"].to_list(), players_df["gsis_id"].to_list()))
  
+ 
+def _parse_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+_NGS_CONFIG = {
+    "passing": (NgsPassing, NgsPassingCreate, [
+        "avg_time_to_throw", "avg_completed_air_yards", "avg_intended_air_yards",
+        "avg_air_yards_differential", "aggressiveness", "max_completed_air_distance",
+        "avg_air_yards_to_sticks", "completion_percentage", "expected_completion_percentage",
+        "completion_percentage_above_expectation", "avg_air_distance", "max_air_distance",
+        "passer_rating",
+    ]),
+    "receiving": (NgsReceiving, NgsReceivingCreate, [
+        "avg_cushion", "avg_separation", "avg_intended_air_yards",
+        "percent_share_of_intended_air_yards", "catch_percentage", "avg_yac",
+        "avg_expected_yac", "avg_yac_above_expectation",
+    ]),
+    "rushing": (NgsRushing, NgsRushingCreate, [
+        "efficiency", "percent_attempts_gte_eight_defenders", "avg_time_to_los",
+        "avg_rush_yards", "expected_rush_yards", "rush_yards_over_expected",
+        "rush_yards_over_expected_per_att", "rush_pct_over_expected",
+    ]),
+}
+ 
+ 
+def load_nextgen_stats(session: Session, seasons: list[int]) -> None:
+    known_ids = {row[0] for row in session.query(Player.player_id).all()}
+ 
+    for stat_type, (model, schema, stat_fields) in _NGS_CONFIG.items():
+        df = nfl.load_nextgen_stats(seasons, stat_type=stat_type)
+        rows, skipped = [], 0
+        for r in df.iter_rows(named=True):
+            if not r["player_gsis_id"] or r["player_gsis_id"] not in known_ids:
+                skipped += 1
+                continue
+            try:
+                entry = schema(
+                    player_id=r["player_gsis_id"],
+                    season=r["season"],
+                    week=r["week"],
+                    season_type=r["season_type"],
+                    team_abbr=r["team_abbr"],
+                    **{f: r[f] for f in stat_fields},
+                )
+            except Exception:
+                skipped += 1
+                continue
+            rows.append(entry.model_dump())
+ 
+        upsert(session, model, rows, conflict_cols=["player_id", "season", "week", "season_type"])
+        print(f"  ngs_{stat_type}: {len(rows)} upserted, {skipped} skipped")
+
 def main(seasons: list[int]) -> None:
     engine = create_engine(DB_URL)
     Base.metadata.create_all(engine)
@@ -245,6 +354,18 @@ def main(seasons: list[int]) -> None:
  
         print("Loading player stats...")
         load_player_stats(session, seasons)
+        session.commit()
+ 
+        print("Loading games (schedules)...")
+        load_games(session, seasons)
+        session.commit()
+ 
+        print("Loading snap counts...")
+        load_snap_counts(session, seasons)
+        session.commit()
+ 
+        print("Loading Next Gen Stats...")
+        load_nextgen_stats(session, seasons)
         session.commit()
  
     print("Done.")
