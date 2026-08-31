@@ -5,8 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
  
 from database import get_db
-from models import Player, PlayerStat, PlayerTeamSeason
-from schemas import PlayerRead, PlayerStatRead, PlayerWithStatsRead
+from models import Player, PlayerStat, PlayerTeamSeason, SnapCount, NgsPassing, NgsReceiving, NgsRushing
+from schemas import (
+    PlayerRead, PlayerStatRead, PlayerWithStatsRead,
+    SnapCountRead, NgsPassingRead, NgsReceivingRead, NgsRushingRead,
+)
  
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -90,4 +93,82 @@ def get_player_stats(
     if week:
         stmt = stmt.where(PlayerStat.week == week)
     stmt = stmt.order_by(PlayerStat.week)
+    return db.execute(stmt).scalars().all()
+
+
+@router.get("/{player_id}/snap-counts", response_model=list[SnapCountRead])
+def get_player_snap_counts(
+    player_id: str,
+    season: int = Query(..., description="Required"),
+    week: Optional[int] = Query(None, ge=1, le=22),
+    db: Session = Depends(get_db),
+):
+    """Snap participation by game — offense/defense/special-teams counts
+    and share. Useful alongside /stats for separating volume from
+    efficiency (e.g. a WR's target share vs. how often they're even on
+    the field)."""
+    if not db.get(Player, player_id):
+        raise HTTPException(status_code=404, detail=f"No player with id '{player_id}'")
+
+    stmt = select(SnapCount).where(SnapCount.player_id == player_id, SnapCount.season == season)
+    if week:
+        stmt = stmt.where(SnapCount.week == week)
+    stmt = stmt.order_by(SnapCount.week)
+    return db.execute(stmt).scalars().all()
+
+
+@router.get("/{player_id}/ngs/passing", response_model=list[NgsPassingRead])
+def get_player_ngs_passing(
+    player_id: str,
+    season: int = Query(..., description="Required"),
+    week: Optional[int] = Query(None, ge=1, le=22),
+    include_season_aggregate: bool = Query(
+        False, description="Include nflreadpy's week=0 season-to-date summary row"
+    ),
+    db: Session = Depends(get_db),
+):
+    return _get_ngs(db, NgsPassing, player_id, season, week, include_season_aggregate)
+
+
+@router.get("/{player_id}/ngs/receiving", response_model=list[NgsReceivingRead])
+def get_player_ngs_receiving(
+    player_id: str,
+    season: int = Query(..., description="Required"),
+    week: Optional[int] = Query(None, ge=1, le=22),
+    include_season_aggregate: bool = Query(
+        False, description="Include nflreadpy's week=0 season-to-date summary row"
+    ),
+    db: Session = Depends(get_db),
+):
+    return _get_ngs(db, NgsReceiving, player_id, season, week, include_season_aggregate)
+
+
+@router.get("/{player_id}/ngs/rushing", response_model=list[NgsRushingRead])
+def get_player_ngs_rushing(
+    player_id: str,
+    season: int = Query(..., description="Required"),
+    week: Optional[int] = Query(None, ge=1, le=22),
+    include_season_aggregate: bool = Query(
+        False, description="Include nflreadpy's week=0 season-to-date summary row"
+    ),
+    db: Session = Depends(get_db),
+):
+    return _get_ngs(db, NgsRushing, player_id, season, week, include_season_aggregate)
+
+
+def _get_ngs(db: Session, model, player_id: str, season: int, week: Optional[int], include_season_aggregate: bool):
+    """Shared by all three ngs/* routes - same filter shape, only the
+    table differs, and each route keeps its own typed response_model."""
+    if not db.get(Player, player_id):
+        raise HTTPException(status_code=404, detail=f"No player with id '{player_id}'")
+
+    stmt = select(model).where(model.player_id == player_id, model.season == season)
+    if week:
+        stmt = stmt.where(model.week == week)
+    elif not include_season_aggregate:
+        # week=0 is nflreadpy's season-to-date row, not a real game -
+        # exclude it by default so a weekly listing doesn't get an
+        # unexpected extra entry.
+        stmt = stmt.where(model.week > 0)
+    stmt = stmt.order_by(model.week)
     return db.execute(stmt).scalars().all()
