@@ -4,7 +4,42 @@ __pycache__/
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 
 # Virtual environments
-.venv
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Databases (SQLite dev files)
+*.db
+*.sqlite
+*.sqlite3
+db/*.db
+
+# uv / package manager cache (optional — uv.lock itself should stay tracked)
+.uv-cache/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS cruft
+.DS_Store
+
+# Logs
+*.log
