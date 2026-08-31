@@ -43,9 +43,10 @@ class PlayerCreate(PlayerBase):
  
 class PlayerRead(PlayerBase):
     model_config = ConfigDict(from_attributes=True)
- 
+
     player_id: str
     updated_at: datetime
+    current_team_abbr: Optional[str] = None
  
  
 class PlayerTeamSeasonSchema(BaseModel):

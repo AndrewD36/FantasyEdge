@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy import select, func
  
 from database import get_db
 from models import Player, PlayerStat, PlayerTeamSeason, SnapCount, NgsPassing, NgsReceiving, NgsRushing
@@ -27,8 +28,32 @@ def list_players(
 ):
     """Browse/search the player dimension. Every filter here narrows *who*
     you get back — for filtering by performance, use /stats/leaderboard."""
-    stmt = select(Player)
- 
+
+    # Rank each player's team-season rows by recency (season desc, week desc),
+    # so rn == 1 is their most recent known team.
+    ranked = (
+        select(
+            PlayerTeamSeason.player_id,
+            PlayerTeamSeason.team_abbr,
+            func.row_number()
+            .over(
+                partition_by=PlayerTeamSeason.player_id,
+                order_by=(PlayerTeamSeason.season.desc(), PlayerTeamSeason.week.desc()),
+            )
+            .label("rn"),
+        )
+    ).subquery()
+
+    current_team = (
+        select(ranked.c.player_id, ranked.c.team_abbr)
+        .where(ranked.c.rn == 1)
+        .subquery()
+    )
+
+    stmt = select(Player, current_team.c.team_abbr).outerjoin(
+        current_team, current_team.c.player_id == Player.player_id
+    )
+
     if position:
         stmt = stmt.where(Player.position == position.upper())
     if search:
@@ -40,9 +65,14 @@ def list_players(
         if season:
             team_player_ids = team_player_ids.where(PlayerTeamSeason.season == season)
         stmt = stmt.where(Player.player_id.in_(team_player_ids))
- 
+
     stmt = stmt.order_by(Player.full_name).offset(offset).limit(limit)
-    return db.execute(stmt).scalars().all()
+
+    rows = db.execute(stmt).all()
+    return [
+        PlayerRead(**PlayerRead.model_validate(player).model_dump(), current_team_abbr=team_abbr)
+        for player, team_abbr in rows
+    ]
  
  
 @router.get("/{player_id}", response_model=PlayerWithStatsRead)
