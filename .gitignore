@@ -1,0 +1,12 @@
+# OS/editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Env files that might live at root
+.env
+.env.local
+
+# Root-level build artifacts if any
+*.log
