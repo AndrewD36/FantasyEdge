@@ -1,14 +1,18 @@
 from fastapi import FastAPI
-
-from app.routers.stats import router as stats_router
-
+ 
+from routers import players, teams, stats
+ 
 app = FastAPI(
-    title="NFL Stats API"
+    title="FantasyEdge Data API",
+    description="Read API over nflreadpy-sourced player, team, and stat data.",
+    version="0.1.0",
 )
-
-app.include_router(stats_router)
-
-
-@app.get("/")
-def root():
-    return {"message": "NFL Stats API"}
+ 
+app.include_router(players.router)
+app.include_router(teams.router)
+app.include_router(stats.router)
+ 
+ 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
