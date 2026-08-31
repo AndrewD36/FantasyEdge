@@ -111,3 +111,181 @@ class PlayerWithStatsRead(PlayerRead):
     that includes their season stat log in one payload."""
  
     stats: list[PlayerStatRead] = []
+
+
+class GameRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    game_id: str
+    season: int
+    week: int
+    game_type: str
+    gameday: Optional[date] = None
+    weekday: Optional[str] = None
+    gametime: Optional[str] = None
+
+    away_team: str
+    home_team: str
+    away_score: Optional[int] = None
+    home_score: Optional[int] = None
+    result: Optional[int] = None
+    total: Optional[int] = None
+    overtime: bool = False
+    div_game: bool = False
+
+    roof: Optional[str] = None
+    surface: Optional[str] = None
+    temp: Optional[int] = None
+    wind: Optional[int] = None
+
+    away_qb_id: Optional[str] = None
+    home_qb_id: Optional[str] = None
+    away_qb_name: Optional[str] = None
+    home_qb_name: Optional[str] = None
+    away_coach: Optional[str] = None
+    home_coach: Optional[str] = None
+    referee: Optional[str] = None
+    stadium: Optional[str] = None
+
+    spread_line: Optional[float] = None
+    total_line: Optional[float] = None
+
+
+class SnapCountBase(BaseModel):
+    pfr_player_id: str
+    game_id: str
+    season: int
+    week: int
+    game_type: str
+    player_name: str
+    position: Optional[str] = None
+    team_abbr: Optional[str] = None
+    opponent_abbr: Optional[str] = None
+
+    offense_snaps: Optional[float] = None
+    offense_pct: Optional[float] = None
+    defense_snaps: Optional[float] = None
+    defense_pct: Optional[float] = None
+    st_snaps: Optional[float] = None
+    st_pct: Optional[float] = None
+
+
+class SnapCountCreate(SnapCountBase):
+    player_id: Optional[str] = None  # nullable — resolved via pfr_id, not always found
+
+
+class SnapCountRead(SnapCountBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    player_id: Optional[str] = None
+
+
+class NgsPassingBase(BaseModel):
+    season: int
+    week: int
+    season_type: str
+    team_abbr: Optional[str] = None
+
+    avg_time_to_throw: Optional[float] = None
+    avg_completed_air_yards: Optional[float] = None
+    avg_intended_air_yards: Optional[float] = None
+    avg_air_yards_differential: Optional[float] = None
+    aggressiveness: Optional[float] = None
+    max_completed_air_distance: Optional[float] = None
+    avg_air_yards_to_sticks: Optional[float] = None
+    completion_percentage: Optional[float] = None
+    expected_completion_percentage: Optional[float] = None
+    completion_percentage_above_expectation: Optional[float] = None
+    avg_air_distance: Optional[float] = None
+    max_air_distance: Optional[float] = None
+    passer_rating: Optional[float] = None
+
+    @field_validator("season_type")
+    @classmethod
+    def valid_season_type(cls, v: str) -> str:
+        allowed = {"REG", "POST"}
+        if v not in allowed:
+            raise ValueError(f"season_type must be one of {allowed}")
+        return v
+
+
+class NgsPassingCreate(NgsPassingBase):
+    player_id: str
+
+
+class NgsPassingRead(NgsPassingBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    player_id: str
+
+
+class NgsReceivingBase(BaseModel):
+    season: int
+    week: int
+    season_type: str
+    team_abbr: Optional[str] = None
+
+    avg_cushion: Optional[float] = None
+    avg_separation: Optional[float] = None
+    avg_intended_air_yards: Optional[float] = None
+    percent_share_of_intended_air_yards: Optional[float] = None
+    catch_percentage: Optional[float] = None
+    avg_yac: Optional[float] = None
+    avg_expected_yac: Optional[float] = None
+    avg_yac_above_expectation: Optional[float] = None
+
+    @field_validator("season_type")
+    @classmethod
+    def valid_season_type(cls, v: str) -> str:
+        allowed = {"REG", "POST"}
+        if v not in allowed:
+            raise ValueError(f"season_type must be one of {allowed}")
+        return v
+
+
+class NgsReceivingCreate(NgsReceivingBase):
+    player_id: str
+
+
+class NgsReceivingRead(NgsReceivingBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    player_id: str
+
+
+class NgsRushingBase(BaseModel):
+    season: int
+    week: int
+    season_type: str
+    team_abbr: Optional[str] = None
+
+    efficiency: Optional[float] = None
+    percent_attempts_gte_eight_defenders: Optional[float] = None
+    avg_time_to_los: Optional[float] = None
+    avg_rush_yards: Optional[float] = None
+    expected_rush_yards: Optional[float] = None
+    rush_yards_over_expected: Optional[float] = None
+    rush_yards_over_expected_per_att: Optional[float] = None
+    rush_pct_over_expected: Optional[float] = None
+
+    @field_validator("season_type")
+    @classmethod
+    def valid_season_type(cls, v: str) -> str:
+        allowed = {"REG", "POST"}
+        if v not in allowed:
+            raise ValueError(f"season_type must be one of {allowed}")
+        return v
+
+
+class NgsRushingCreate(NgsRushingBase):
+    player_id: str
+
+
+class NgsRushingRead(NgsRushingBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    player_id: str

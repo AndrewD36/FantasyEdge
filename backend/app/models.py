@@ -1,11 +1,10 @@
-from sqlalchemy import (ForeignKey, Index, String, Integer, Float, Date, DateTime, UniqueConstraint, func)
+from sqlalchemy import (ForeignKey, Index, String, Integer, Float, Date, DateTime, Boolean, UniqueConstraint, func)
 from sqlalchemy.orm import ( DeclarativeBase, Mapped, mapped_column, relationship)
 from datetime import date, datetime
 from typing import Optional
 
 class Base(DeclarativeBase):
     pass
-
 
 class Team(Base):
     __tablename__ = "teams"
@@ -53,6 +52,10 @@ class Player(Base):
     team_seasons: Mapped[list["PlayerTeamSeason"]] = relationship(
         back_populates="player"
     )
+    snap_counts: Mapped[list["SnapCount"]] = relationship(back_populates="player")
+    ngs_passing: Mapped[list["NgsPassing"]] = relationship(back_populates="player")
+    ngs_receiving: Mapped[list["NgsReceiving"]] = relationship(back_populates="player")
+    ngs_rushing: Mapped[list["NgsRushing"]] = relationship(back_populates="player")
 
 class PlayerTeamSeason(Base):
     """Bridge table: which team a player was on, by season/week.
@@ -124,3 +127,180 @@ class PlayerStat(Base):
  
     player: Mapped["Player"] = relationship(back_populates="stats")
     team: Mapped[Optional["Team"]] = relationship(back_populates="stats")
+
+
+class Game(Base):
+    """One row per game, from nflreadpy.load_schedules(). Includes Vegas
+    lines (spread/total) — genuinely useful for fantasy projections since
+    implied team totals predict scoring environment better than raw stats
+    alone. Not just a schedule lookup table."""
+
+    __tablename__ = "games"
+
+    game_id: Mapped[str] = mapped_column(String(20), primary_key=True)  # e.g. "2023_01_DET_KC"
+    season: Mapped[int] = mapped_column(Integer, index=True)
+    week: Mapped[int] = mapped_column(Integer)
+    game_type: Mapped[str] = mapped_column(String(4))  # REG, WC, DIV, CON, SB
+    gameday: Mapped[Optional[date]] = mapped_column(Date)
+    weekday: Mapped[Optional[str]] = mapped_column(String(16))
+    gametime: Mapped[Optional[str]] = mapped_column(String(8))
+
+    away_team: Mapped[str] = mapped_column(ForeignKey("teams.team_abbr"))
+    home_team: Mapped[str] = mapped_column(ForeignKey("teams.team_abbr"))
+    away_score: Mapped[Optional[int]] = mapped_column(Integer)
+    home_score: Mapped[Optional[int]] = mapped_column(Integer)
+    result: Mapped[Optional[int]] = mapped_column(Integer)  # home - away margin
+    total: Mapped[Optional[int]] = mapped_column(Integer)  # combined points scored
+    overtime: Mapped[bool] = mapped_column(Boolean, default=False)
+    div_game: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    roof: Mapped[Optional[str]] = mapped_column(String(16))
+    surface: Mapped[Optional[str]] = mapped_column(String(16))
+    temp: Mapped[Optional[int]] = mapped_column(Integer)
+    wind: Mapped[Optional[int]] = mapped_column(Integer)
+
+    away_qb_id: Mapped[Optional[str]] = mapped_column(ForeignKey("players.player_id"))
+    home_qb_id: Mapped[Optional[str]] = mapped_column(ForeignKey("players.player_id"))
+    away_qb_name: Mapped[Optional[str]] = mapped_column(String(64))
+    home_qb_name: Mapped[Optional[str]] = mapped_column(String(64))
+    away_coach: Mapped[Optional[str]] = mapped_column(String(64))
+    home_coach: Mapped[Optional[str]] = mapped_column(String(64))
+    referee: Mapped[Optional[str]] = mapped_column(String(64))
+    stadium: Mapped[Optional[str]] = mapped_column(String(128))
+
+    spread_line: Mapped[Optional[float]] = mapped_column(Float)  # negative = home favored
+    total_line: Mapped[Optional[float]] = mapped_column(Float)  # Vegas over/under
+
+    away_qb: Mapped[Optional["Player"]] = relationship(foreign_keys=[away_qb_id])
+    home_qb: Mapped[Optional["Player"]] = relationship(foreign_keys=[home_qb_id])
+    # Note: no Team-side relationship for home_team/away_team - Team has two
+    # FKs into the same games table (home + away), which needs explicit
+    # foreign_keys/overlaps handling on both sides. Skipped for now since
+    # nothing currently needs "all games for a team" as an ORM traversal;
+    # query Game directly with a where(home_team == x | away_team == x)
+    # if/when that's needed.
+
+
+class SnapCount(Base):
+    """One row per player per game, from nflreadpy.load_snap_counts().
+    Source keys players by pfr_player_id, not gsis_id - player_id here is
+    resolved via players.pfr_id during ingestion and is nullable for the
+    rare player nflreadpy can't cross-reference (kept as pfr_player_id
+    regardless, so nothing is silently dropped)."""
+
+    __tablename__ = "snap_counts"
+    __table_args__ = (
+        UniqueConstraint("pfr_player_id", "game_id", name="uq_snap_player_game"),
+        Index("idx_snaps_player_season", "player_id", "season"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    player_id: Mapped[Optional[str]] = mapped_column(ForeignKey("players.player_id"))
+    pfr_player_id: Mapped[str] = mapped_column(String(16))  # always populated, even if player_id isn't
+    game_id: Mapped[str] = mapped_column(ForeignKey("games.game_id"))
+    season: Mapped[int] = mapped_column(Integer)
+    week: Mapped[int] = mapped_column(Integer)
+    game_type: Mapped[str] = mapped_column(String(4))
+
+    player_name: Mapped[str] = mapped_column(String(128))  # from source, in case player_id is null
+    position: Mapped[Optional[str]] = mapped_column(String(4))
+    team_abbr: Mapped[Optional[str]] = mapped_column(ForeignKey("teams.team_abbr"))
+    opponent_abbr: Mapped[Optional[str]] = mapped_column(String(3))
+
+    offense_snaps: Mapped[Optional[float]] = mapped_column(Float)
+    offense_pct: Mapped[Optional[float]] = mapped_column(Float)
+    defense_snaps: Mapped[Optional[float]] = mapped_column(Float)
+    defense_pct: Mapped[Optional[float]] = mapped_column(Float)
+    st_snaps: Mapped[Optional[float]] = mapped_column(Float)
+    st_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+    player: Mapped[Optional["Player"]] = relationship(back_populates="snap_counts")
+
+
+class NgsPassing(Base):
+    """Next Gen Stats passing, from nflreadpy.load_nextgen_stats(stat_type='passing').
+    week=0 rows are nflreadpy's season-to-date aggregate, not a real game -
+    filter it out (week > 0) unless you specifically want the season summary."""
+
+    __tablename__ = "ngs_passing"
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", "week", "season_type", name="uq_ngs_passing"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[str] = mapped_column(ForeignKey("players.player_id"))
+    season: Mapped[int] = mapped_column(Integer)
+    week: Mapped[int] = mapped_column(Integer)  # 0 = season aggregate row
+    season_type: Mapped[str] = mapped_column(String(4))
+    team_abbr: Mapped[Optional[str]] = mapped_column(ForeignKey("teams.team_abbr"))
+
+    avg_time_to_throw: Mapped[Optional[float]] = mapped_column(Float)
+    avg_completed_air_yards: Mapped[Optional[float]] = mapped_column(Float)
+    avg_intended_air_yards: Mapped[Optional[float]] = mapped_column(Float)
+    avg_air_yards_differential: Mapped[Optional[float]] = mapped_column(Float)
+    aggressiveness: Mapped[Optional[float]] = mapped_column(Float)
+    max_completed_air_distance: Mapped[Optional[float]] = mapped_column(Float)
+    avg_air_yards_to_sticks: Mapped[Optional[float]] = mapped_column(Float)
+    completion_percentage: Mapped[Optional[float]] = mapped_column(Float)
+    expected_completion_percentage: Mapped[Optional[float]] = mapped_column(Float)
+    completion_percentage_above_expectation: Mapped[Optional[float]] = mapped_column(Float)
+    avg_air_distance: Mapped[Optional[float]] = mapped_column(Float)
+    max_air_distance: Mapped[Optional[float]] = mapped_column(Float)
+    passer_rating: Mapped[Optional[float]] = mapped_column(Float)
+
+    player: Mapped["Player"] = relationship(back_populates="ngs_passing")
+
+
+class NgsReceiving(Base):
+    """Next Gen Stats receiving, from load_nextgen_stats(stat_type='receiving')."""
+
+    __tablename__ = "ngs_receiving"
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", "week", "season_type", name="uq_ngs_receiving"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[str] = mapped_column(ForeignKey("players.player_id"))
+    season: Mapped[int] = mapped_column(Integer)
+    week: Mapped[int] = mapped_column(Integer)
+    season_type: Mapped[str] = mapped_column(String(4))
+    team_abbr: Mapped[Optional[str]] = mapped_column(ForeignKey("teams.team_abbr"))
+
+    avg_cushion: Mapped[Optional[float]] = mapped_column(Float)
+    avg_separation: Mapped[Optional[float]] = mapped_column(Float)
+    avg_intended_air_yards: Mapped[Optional[float]] = mapped_column(Float)
+    percent_share_of_intended_air_yards: Mapped[Optional[float]] = mapped_column(Float)
+    catch_percentage: Mapped[Optional[float]] = mapped_column(Float)
+    avg_yac: Mapped[Optional[float]] = mapped_column(Float)
+    avg_expected_yac: Mapped[Optional[float]] = mapped_column(Float)
+    avg_yac_above_expectation: Mapped[Optional[float]] = mapped_column(Float)
+
+    player: Mapped["Player"] = relationship(back_populates="ngs_receiving")
+
+
+class NgsRushing(Base):
+    """Next Gen Stats rushing, from load_nextgen_stats(stat_type='rushing')."""
+
+    __tablename__ = "ngs_rushing"
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", "week", "season_type", name="uq_ngs_rushing"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[str] = mapped_column(ForeignKey("players.player_id"))
+    season: Mapped[int] = mapped_column(Integer)
+    week: Mapped[int] = mapped_column(Integer)
+    season_type: Mapped[str] = mapped_column(String(4))
+    team_abbr: Mapped[Optional[str]] = mapped_column(ForeignKey("teams.team_abbr"))
+
+    efficiency: Mapped[Optional[float]] = mapped_column(Float)
+    percent_attempts_gte_eight_defenders: Mapped[Optional[float]] = mapped_column(Float)
+    avg_time_to_los: Mapped[Optional[float]] = mapped_column(Float)
+    avg_rush_yards: Mapped[Optional[float]] = mapped_column(Float)
+    expected_rush_yards: Mapped[Optional[float]] = mapped_column(Float)
+    rush_yards_over_expected: Mapped[Optional[float]] = mapped_column(Float)
+    rush_yards_over_expected_per_att: Mapped[Optional[float]] = mapped_column(Float)
+    rush_pct_over_expected: Mapped[Optional[float]] = mapped_column(Float)
+
+    player: Mapped["Player"] = relationship(back_populates="ngs_rushing")
